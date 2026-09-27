@@ -1,9 +1,46 @@
-# Local S3-compatible stack for development.
+# Local development stack: S3-compatible object store (MinIO) + Airflow 2.9.
 #
-# Note: the official MinIO images were removed from Docker Hub/Quay, so this
-# uses the maintained elestio/minio community mirror (verified multi-arch,
+# MinIO note: the official MinIO images were removed from Docker Hub/Quay, so
+# this uses the maintained elestio/minio community mirror (verified multi-arch,
 # ships both `minio` server and `mc`). Point S3_ENDPOINT_URL at
 # http://localhost:9000 and boto3 talks to it exactly like real AWS S3.
+#
+# Airflow (webserver, scheduler, postgres metadata DB, LocalExecutor) runs
+# under the `airflow` profile: `make airflow-up`. It mounts dags/,
+# agentic_warehouse_ops/ and dbt/ so code changes are picked up live, and
+# shares ./data for the DuckDB warehouse file.
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.airflow
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__PARALLELISM: "${AIRFLOW_PARALLELISM:-1}"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "true"
+    AIRFLOW__WEBSERVER__SECRET_KEY: dev-only-secret-key
+    PYTHONPATH: /opt/airflow
+    TZ: UTC
+    WAREHOUSE_PROFILE: duckdb
+    DUCKDB_PATH: /opt/airflow/data/warehouse.duckdb
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+    RAW_BUCKET: raw-landing
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ../agentic_warehouse_ops:/opt/airflow/agentic_warehouse_ops
+    - ../dbt:/opt/airflow/dbt
+    - ../data:/opt/airflow/data
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  profiles: ["airflow"]
+
 services:
   minio:
     image: elestio/minio:latest
@@ -35,5 +72,55 @@ services:
       mc mb --ignore-existing local/raw-landing
       "
 
+  airflow-postgres:
+    image: postgres:16
+    profiles: ["airflow"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "${AIRFLOW_POSTGRES_PORT:-54332}:5432"
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    profiles: ["airflow"]
+    command: version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_DB_UPGRADE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+      _AIRFLOW_WWW_USER_FIRSTNAME: Airflow
+      _AIRFLOW_WWW_USER_LASTNAME: Admin
+      _AIRFLOW_WWW_USER_EMAIL: airflow@example.com
+
+  airflow-webserver:
+    <<: *airflow-common
+    profiles: ["airflow"]
+    command: webserver
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  airflow-scheduler:
+    <<: *airflow-common
+    profiles: ["airflow"]
+    command: scheduler
+
 volumes:
   minio-data:
+  airflow-postgres-data:

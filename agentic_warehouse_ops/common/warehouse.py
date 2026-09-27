@@ -56,6 +56,18 @@ class WarehouseEngine(ABC):
     def ping(self) -> bool:
         """Return ``True`` if the warehouse is reachable and healthy."""
 
+    @abstractmethod
+    def begin(self) -> None:
+        """Start an explicit transaction."""
+
+    @abstractmethod
+    def commit(self) -> None:
+        """Commit the current transaction."""
+
+    @abstractmethod
+    def rollback(self) -> None:
+        """Roll back the current transaction."""
+
 
 class DuckDBEngine(WarehouseEngine):
     """DuckDB-backed engine using a local database file."""
@@ -83,6 +95,15 @@ class DuckDBEngine(WarehouseEngine):
         except Exception:
             return False
         return True
+
+    def begin(self) -> None:
+        self._connection.begin()
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
 
 
 class SnowflakeEngine(WarehouseEngine):
@@ -127,6 +148,15 @@ class SnowflakeEngine(WarehouseEngine):
         except Exception:
             return False
         return True
+
+    def begin(self) -> None:
+        self._connection.cursor().execute("BEGIN")
+
+    def commit(self) -> None:
+        self._connection.cursor().execute("COMMIT")
+
+    def rollback(self) -> None:
+        self._connection.cursor().execute("ROLLBACK")
 
 
 def get_engine(

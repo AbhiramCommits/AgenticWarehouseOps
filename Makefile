@@ -1,4 +1,4 @@
-.PHONY: install seed minio-up minio-seed lint typecheck test fmt
+.PHONY: install seed minio-up minio-seed airflow-up airflow-down lint typecheck test fmt
 
 install:
 	uv sync
@@ -11,6 +11,13 @@ minio-up:
 
 minio-seed:
 	uv run seed-minio
+
+airflow-up:
+	chmod -R a+w data
+	docker compose -f docker/docker-compose.yml --profile airflow up -d --build --wait
+
+airflow-down:
+	docker compose -f docker/docker-compose.yml --profile airflow down
 
 lint:
 	uv run ruff check .

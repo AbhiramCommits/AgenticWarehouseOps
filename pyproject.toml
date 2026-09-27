@@ -25,6 +25,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "moto[s3]>=5.0",
     "mypy>=1.10",
     "pandas-stubs>=2.2",
     "pytest>=8.2",

@@ -1,0 +1,17 @@
+# Airflow image for the agentic-warehouse-ops platform.
+#
+# Based on the official apache/airflow 2.9 image; adds the runtime deps the
+# ingestion DAGs need. The dags/, agentic_warehouse_ops/ and dbt/ directories
+# are bind-mounted from the host, so no rebuild is needed for code changes.
+# Packages are installed as the image's default `airflow` user (the image's
+# pip wrapper refuses to run as root).
+FROM apache/airflow:2.9.3-python3.11
+
+RUN pip install --no-cache-dir \
+    "boto3>=1.34" \
+    "duckdb>=1.1" \
+    "pandas>=2.1,<3" \
+    "pyarrow>=16" \
+    "pydantic>=2.7" \
+    "pydantic-settings>=2.2" \
+    "structlog>=24.1"

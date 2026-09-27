@@ -1,5 +1,8 @@
-"""Ingestion: synthetic source generation and landing into object storage."""
+"""Ingestion: synthetic source generation and landing into object storage.
 
-from agentic_warehouse_ops.ingestion.generate_sources import generate_dataset
+Submodules (``generate_sources``, ``seed_minio``, ``s3_to_warehouse``,
+``registry``, ``quality``) are imported directly; this package deliberately
+stays import-light so runtime environments (e.g. Airflow) need no CLI deps.
+"""
 
-__all__ = ["generate_dataset"]
+__all__: list[str] = []
