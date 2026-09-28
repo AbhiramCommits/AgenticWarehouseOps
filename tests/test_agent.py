@@ -153,6 +153,11 @@ def engine(tmp_path: Path) -> Iterator[WarehouseEngine]:
 @pytest.fixture
 def seeded_engine(engine: WarehouseEngine) -> WarehouseEngine:
     """Warehouse with marts tables matching the fixture manifest."""
+    return seed_tables(engine)
+
+
+def seed_tables(engine: WarehouseEngine) -> WarehouseEngine:
+    """Create marts + support-ticket tables matching the fixture manifest."""
     engine.execute("CREATE SCHEMA raw_marts")
     engine.execute(
         "CREATE TABLE raw_marts.dim_customer (customer_id BIGINT, full_name VARCHAR,"

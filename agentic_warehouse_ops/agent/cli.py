@@ -20,6 +20,68 @@ def version() -> None:
 
 
 @app.command()
+def audit(
+    last: int = typer.Option(20, "--last", help="Number of recent questions to show."),
+    question_id: str | None = typer.Option(None, "--question-id", help="Filter to one question."),
+) -> None:
+    """Show the agent audit log (questions and their tool calls)."""
+    from agentic_warehouse_ops.agent.audit import (
+        list_audit,
+        list_questions,
+        migrate_agent_audit,
+    )
+    from agentic_warehouse_ops.common.warehouse import get_engine
+
+    engine = get_engine()
+    migrate_agent_audit(engine)
+    questions = list_questions(engine, limit=last)
+    for row in questions.to_dict("records"):
+        typer.echo(
+            f"[question] {row['question_id']} status={row['status']} "
+            f"tools={row['tool_call_count']} cost={row['total_cost']} model={row['llm_model']}"
+        )
+        typer.echo(f"  q: {row['question'][:120]}")
+        typer.echo(f"  a: {row['answer'][:160]}")
+    calls = list_audit(engine, limit=last, question_id=question_id)
+    for row in calls.to_dict("records"):
+        typer.echo(
+            f"[call] {row['tool_name']} rows={row['rows_returned']} "
+            f"bytes={row['bytes_scanned']} verdict={row['guardrail_verdict']} "
+            f"question={row['question_id']}"
+        )
+
+
+@app.command()
+def replay(
+    question_id: str = typer.Option(
+        ..., "--question-id", help="Question id recorded in the audit log."
+    ),
+    current_manifest: str | None = typer.Option(
+        None, "--current-manifest", help="Path to the current manifest to diff against."
+    ),
+) -> None:
+    """Re-execute a recorded question's tool calls and print the drift verdict."""
+    from agentic_warehouse_ops.common.reproducibility import replay_question
+    from agentic_warehouse_ops.common.warehouse import get_engine
+
+    result = replay_question(
+        get_engine(),
+        question_id,
+        current_manifest_path=current_manifest,
+    )
+    typer.echo(f"question: {result['question_id']} manifest={result['manifest_hash'][:12]}")
+    typer.echo(f"verdict: {result['verdict']}")
+    if result.get("reason"):
+        typer.echo(f"reason: {result['reason']}")
+    for comparison in result.get("comparisons", []):
+        typer.echo(
+            f"[call] {comparison['tool']} {comparison['mart']} "
+            f"recorded={comparison['recorded_rows']} pinned={comparison['pinned_rows']} "
+            f"current={comparison['current_rows']} note={comparison['note']}"
+        )
+
+
+@app.command()
 def ask(
     question: str = typer.Argument(..., help="Natural-language question about the marts."),
     trace: bool = typer.Option(

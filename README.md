@@ -94,6 +94,23 @@ uv run uvicorn agentic_warehouse_ops.agent.api:app --port 8003   # POST /ask -> 
 - Three typed tools, no free-text SQL anywhere: `query_mart` (mart Literal, whitelisted columns, typed filters compiled into one parameterised SELECT — values are always bound parameters), `vector_search_tickets` (redacted snippets + ticket ids), `lookup_schema` (restricted columns flagged unavailable)
 - LangGraph agent: `plan -> select_tool -> execute_tool -> (loop, max 5) -> synthesize`; every answer is an `AgentAnswer` with the tool trace, executed SQL, evidence ids, manifest hash, and run id
 
+## Guardrails, audit, replay
+
+Every tool call passes through `agentic_warehouse_ops/agent/guardrails.py` — no tool is callable without the wrapper. See `docs/governance.md` for the full classification scheme, role matrix, and guardrail list.
+
+- PII denied twice: at argument validation and by re-scanning results before they reach the LLM; hard `LIMIT 1000` + result byte ceiling; per-question cost budget (estimated bytes) and wall-clock timeout (abort with a partial answer + reason); 25 tool calls/question and 60 questions/minute; compiled SQL must parse (sqlglot) to exactly one `SELECT`
+- `meta.agent_audit` (one row per tool call, incl. denied ones) and `meta.agent_questions` (one row per question, written even on failure)
+
+```bash
+awo audit --last 20            # recent questions + tool calls
+awo audit --question-id <id>   # one question's calls
+awo replay --question-id <id>  # re-execute recorded calls against the pinned
+                               # manifest -> IDENTICAL | DRIFTED | STALE_SCHEMA
+```
+
+- Every transform run snapshots `target/manifest.json` to `artifacts/manifests/<hash>.json` and registers it in `meta.manifest_registry`; every answer records the manifest hash it ran against
+- `AWO_LOG_JSON=1` emits one JSON log line per event with `run_id`/`question_id` bound, so ingestion, dbt, and agent logs correlate on one id
+
 ## Layout
 
 - `agentic_warehouse_ops/` — Python package: `ingestion/`, `governance/`, `agent/`, `evals/`, `common/`

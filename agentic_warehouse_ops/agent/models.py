@@ -41,3 +41,6 @@ class AgentAnswer(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     manifest_hash: str
     run_id: str
+    question_id: str = ""
+    status: str = "success"
+    abort_reason: str | None = None

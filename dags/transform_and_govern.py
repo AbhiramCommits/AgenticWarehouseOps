@@ -142,6 +142,19 @@ def transform_and_govern() -> None:
             _engine(), run_id=lineage["run_id"], dbt_manifest_hash=lineage["manifest_hash"]
         )
 
+    @task(task_id="snapshot_manifest")
+    def snapshot_manifest_task(**context: Any) -> str:
+        """Snapshot target/manifest.json and register it in meta.manifest_registry."""
+        from agentic_warehouse_ops.common.reproducibility import snapshot_manifest
+
+        digest = snapshot_manifest(
+            Path(DBT_DIR, "target", "manifest.json"),
+            _engine(),
+            artifacts_dir="/opt/airflow/artifacts/manifests",
+        )
+        print(f"snapshot manifest {digest}")
+        return digest
+
     @task(task_id="embed_tickets")
     def embed_tickets_task() -> None:
         """Embed support-ticket text into the vector index (resumable, hash-keyed)."""
@@ -166,6 +179,7 @@ def transform_and_govern() -> None:
         >> apply_grants_task()
         >> stamp_manifest_hash_task(lineage)
         >> [
+            snapshot_manifest_task(),
             embed_tickets_task(),
             embed_catalog_task(),
         ]

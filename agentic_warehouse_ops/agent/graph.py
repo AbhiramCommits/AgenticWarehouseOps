@@ -25,6 +25,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.graph import END, StateGraph
 from pydantic import Field, PrivateAttr
 
+from agentic_warehouse_ops.agent.guardrails import GuardrailViolation
 from agentic_warehouse_ops.agent.models import AgentAnswer, AgentStep, ToolCallRecord
 from agentic_warehouse_ops.agent.tools import ToolContext, build_tools
 from agentic_warehouse_ops.governance.catalog import compute_manifest_hash, load_manifest
@@ -70,6 +71,7 @@ class AgentState(TypedDict, total=False):
     iteration: int
     error: str
     answer: str
+    abort_reason: str | None
     route: str
 
 
@@ -82,6 +84,7 @@ class FakeLLM(BaseChatModel):
 
     script: list[str] = Field(default_factory=list)
     fallback: str = "No LLM provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or AGENT_LLM_PROVIDER=fake with a script."
+    model_name: str = "fake-scripted"
 
     _index: int = PrivateAttr(default=0)
 
@@ -201,6 +204,22 @@ def _build_execute_node(
         evidence_ids = list(state.get("evidence_ids", []))
         try:
             result = tools[step.tool].invoke(step.args)
+        except GuardrailViolation as exc:
+            record.duration_ms = int((time.monotonic() - started) * 1000)
+            record.error = str(exc)[:500]
+            if exc.fatal:
+                return {
+                    "iteration": iteration,
+                    "history": history,
+                    "abort_reason": exc.message,
+                    "route": "synthesize",
+                }
+            return {
+                "iteration": iteration,
+                "history": history,
+                "error": str(exc)[:500],
+                "route": "synthesize" if iteration >= max_iterations else "plan",
+            }
         except Exception as exc:  # noqa: BLE001 - any tool failure is recorded
             record.duration_ms = int((time.monotonic() - started) * 1000)
             record.error = str(exc)[:500]
@@ -250,6 +269,12 @@ def _build_synthesize_node(llm: BaseChatModel) -> Callable[[AgentState], AgentSt
             evidence=evidence_blob,
             history=history_blob,
         )
+        abort_reason = state.get("abort_reason")
+        if abort_reason:
+            prompt += (
+                f"\nRUN ABORTED: {abort_reason}. Give a partial answer using the evidence "
+                "above and state the abort reason."
+            )
         response = llm.invoke(
             [
                 SystemMessage(content=SYNTHESIZE_PROMPT.split("Question:")[0].strip()),
@@ -306,8 +331,16 @@ def run_agent(
     manifest: dict[str, Any],
     run_id: str | None = None,
     max_iterations: int = MAX_ITERATIONS,
+    engine: Any = None,
+    config: Any = None,
+    session: Any = None,
 ) -> AgentAnswer:
-    """Run the full agent graph and return the auditable answer.
+    """Run the full agent graph through the guardrails and return the answer.
+
+    Every tool call is wrapped by a :class:`GuardrailSession`, every call and
+    the question itself are written to ``meta.agent_audit`` /
+    ``meta.agent_questions`` (even when the run fails), and the answer is
+    stamped with the manifest hash it ran against.
 
     Args:
         question: Natural-language question.
@@ -316,32 +349,128 @@ def run_agent(
         manifest: Parsed dbt manifest (hash embedded in the answer).
         run_id: Optional run id; defaults to a fresh UUID.
         max_iterations: Tool-execution cap (default 5).
+        engine: Optional warehouse engine; when set, audit rows are written.
+        config: Optional :class:`GuardrailConfig`; defaults are used otherwise.
+        session: Optional pre-built guardrail session.
 
     Returns:
-        A populated :class:`AgentAnswer` with the answer, tool trace, executed
-        SQL, evidence ids, manifest hash, and run id.
+        A populated :class:`AgentAnswer`. Guardrail aborts return a partial
+        answer with ``status="aborted"`` and the reason.
+
+    Raises:
+        Exception: Re-raised after recording the failed question.
     """
-    run_id = run_id or uuid.uuid4().hex
-    graph = build_graph(llm, tools, max_iterations=max_iterations)
-    final: dict[str, Any] = graph.invoke(
-        {
-            "question": question,
-            "run_id": run_id,
-            "history": [],
-            "evidence": [],
-            "sql_executed": [],
-            "evidence_ids": [],
-            "iteration": 0,
-        }
+    import structlog
+
+    from agentic_warehouse_ops.agent.audit import migrate_agent_audit, record_question
+    from agentic_warehouse_ops.agent.guardrails import (
+        GuardrailConfig,
+        GuardrailSession,
+        GuardrailViolation,
+        guard_tools,
     )
-    return AgentAnswer(
+    from agentic_warehouse_ops.common.logging import bind_run, unbind_run
+
+    log = structlog.get_logger()
+    run_id = run_id or uuid.uuid4().hex
+    question_id = uuid.uuid4().hex
+    manifest_hash = compute_manifest_hash(manifest)
+    llm_model = str(getattr(llm, "model_name", None) or getattr(llm, "_llm_type", "unknown"))
+    if engine is not None:
+        migrate_agent_audit(engine)
+    resolved_session: GuardrailSession = session or GuardrailSession(
+        manifest=manifest,
+        config=config or GuardrailConfig(),
+        engine=engine,
+        manifest_hash=manifest_hash,
+        question_id=question_id,
+        run_id=run_id,
+        llm_model=llm_model,
+    )
+    guarded_tools = guard_tools(tools, resolved_session)
+    bind_run(run_id=run_id, question_id=question_id)
+    log.info("agent_start", llm_model=llm_model, manifest_hash=manifest_hash)
+
+    def _finish(answer: AgentAnswer, status: str, tool_calls: int, total_cost: int) -> AgentAnswer:
+        if engine is not None:
+            record_question(
+                engine,
+                question_id=question_id,
+                run_id=run_id,
+                question=question,
+                answer=answer.answer,
+                status=status,
+                tool_call_count=tool_calls,
+                total_cost=total_cost,
+                manifest_hash=manifest_hash,
+                llm_model=llm_model,
+                caller_role=resolved_session.config.caller_role,
+            )
+        unbind_run()
+        return answer
+
+    try:
+        resolved_session.start_question()
+    except GuardrailViolation as exc:
+        log.warning("agent_rejected", reason=exc.message)
+        return _finish(
+            AgentAnswer(
+                answer=f"Request rejected: {exc.message}",
+                manifest_hash=manifest_hash,
+                run_id=run_id,
+                question_id=question_id,
+                status="rejected",
+                abort_reason=exc.message,
+            ),
+            "rejected",
+            0,
+            0,
+        )
+    graph = build_graph(llm, guarded_tools, max_iterations=max_iterations)
+    try:
+        final: dict[str, Any] = graph.invoke(
+            {
+                "question": question,
+                "run_id": run_id,
+                "history": [],
+                "evidence": [],
+                "sql_executed": [],
+                "evidence_ids": [],
+                "iteration": 0,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+        log.exception("agent_failed", reason=str(exc)[:300])
+        record_question(
+            engine,
+            question_id=question_id,
+            run_id=run_id,
+            question=question,
+            answer=f"run failed: {str(exc)[:500]}",
+            status="failed",
+            tool_call_count=resolved_session._tool_calls,
+            total_cost=resolved_session._bytes_used,
+            manifest_hash=manifest_hash,
+            llm_model=llm_model,
+            caller_role=resolved_session.config.caller_role,
+        ) if engine is not None else None
+        unbind_run()
+        raise
+    abort_reason = final.get("abort_reason")
+    status = "aborted" if abort_reason else "success"
+    answer = AgentAnswer(
         answer=str(final.get("answer", "")),
         tool_calls=list(final.get("history", [])),
         sql_executed=list(final.get("sql_executed", [])),
         evidence_ids=list(final.get("evidence_ids", [])),
-        manifest_hash=compute_manifest_hash(manifest),
+        manifest_hash=manifest_hash,
         run_id=run_id,
+        question_id=question_id,
+        status=status,
+        abort_reason=abort_reason,
     )
+    log.info("agent_complete", status=status, tool_calls=len(answer.tool_calls))
+    return _finish(answer, status, resolved_session._tool_calls, resolved_session._bytes_used)
 
 
 def build_agent(
@@ -383,7 +512,14 @@ def build_agent(
     resolved_llm = llm or get_llm()
 
     def ask(question: str, run_id: str | None = None) -> AgentAnswer:
-        return run_agent(question, tools=tools, llm=resolved_llm, manifest=manifest, run_id=run_id)
+        return run_agent(
+            question,
+            tools=tools,
+            llm=resolved_llm,
+            manifest=manifest,
+            run_id=run_id,
+            engine=resolved_engine,
+        )
 
     return ask
 
