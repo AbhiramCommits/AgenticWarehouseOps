@@ -82,6 +82,49 @@ def replay(
 
 
 @app.command()
+def eval(  # noqa: A002 - command name required by the eval spec
+    questions: str = typer.Option(
+        "agentic_warehouse_ops/evals/questions.yaml",
+        "--questions",
+        help="Path to the YAML question set.",
+    ),
+    out_dir: str = typer.Option(
+        "artifacts/evals", "--out-dir", help="Root dir for the timestamped output."
+    ),
+    baseline: str | None = typer.Option(
+        None, "--baseline", help="Path to a previous summary.json to diff against."
+    ),
+    max_regression: float = typer.Option(
+        0.05, "--max-regression", help="Absolute score drop that fails the run."
+    ),
+    embedder: str = typer.Option(
+        "fake", "--embedder", help="Embedder: fake (deterministic) or sentence-transformer."
+    ),
+) -> None:
+    """Score the agent against the committed question set."""
+    from agentic_warehouse_ops.agent.embedder import SentenceTransformerEmbedder
+    from agentic_warehouse_ops.evals.run_eval import run_eval
+
+    resolved_embedder = (
+        SentenceTransformerEmbedder() if embedder == "sentence-transformer" else None
+    )
+    summary, regressions = run_eval(
+        questions_path=questions,
+        out_dir=out_dir,
+        baseline=baseline,
+        max_regression=max_regression,
+        embedder=resolved_embedder,
+    )
+    typer.echo(f"overall: {json.dumps(summary['overall'])}")
+    if baseline:
+        if regressions:
+            for regression in regressions:
+                typer.echo(f"REGRESSION: {regression}", err=True)
+            raise typer.Exit(code=1)
+        typer.echo("baseline comparison: no regressions")
+
+
+@app.command()
 def ask(
     question: str = typer.Argument(..., help="Natural-language question about the marts."),
     trace: bool = typer.Option(

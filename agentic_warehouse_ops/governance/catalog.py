@@ -21,13 +21,18 @@ SOURCE_RESOURCE = "source"
 def compute_manifest_hash(manifest: dict[str, Any]) -> str:
     """Return a stable SHA-256 hash of the dbt manifest contents.
 
+    Only the ``nodes`` and ``sources`` sections are hashed, so the hash is
+    deterministic across re-parses (the top-level metadata carries volatile
+    fields such as ``generated_at``).
+
     Args:
         manifest: Parsed ``manifest.json`` contents.
 
     Returns:
         Hex digest of the canonical JSON encoding.
     """
-    return hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    stable = {"nodes": manifest.get("nodes", {}), "sources": manifest.get("sources", {})}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def load_manifest(manifest_path: str | Path) -> dict[str, Any]:

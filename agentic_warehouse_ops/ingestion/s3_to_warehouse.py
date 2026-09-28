@@ -15,6 +15,7 @@ import hashlib
 import io
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -170,7 +171,45 @@ def load_partition(
     keys = list_partitions(bucket_name, table, dt, s3_client=client, settings=resolved)
     if not keys:
         return LoadResult(table, dt, 0, 0, [], int((time.monotonic() - started) * 1000))
+    files: list[tuple[str, bytes]] = []
+    for key in keys:
+        files.append((key, client.get_object(Bucket=bucket_name, Key=key)["Body"].read()))
+    return load_partition_from_files(table, dt, engine, run_id, files)
 
+
+def load_partition_from_files(
+    table: str,
+    dt: date,
+    engine: WarehouseEngine,
+    run_id: str,
+    files: Sequence[tuple[str, bytes]],
+) -> LoadResult:
+    """Load one (table, dt) partition from in-memory parquet files.
+
+    Identical semantics to :func:`load_partition` (idempotent delete-then-
+    insert, validation, rejects) but reading ``(source_key, parquet_bytes)``
+    tuples instead of S3 — used by CI and the eval harness, which have no
+    object store.
+
+    Args:
+        table: Source table name; must be a key of ``TABLE_SCHEMAS``.
+        dt: Partition date to load.
+        engine: Warehouse engine (raw tables must exist via
+            :func:`~agentic_warehouse_ops.ingestion.registry.migrate_registry`).
+        run_id: Pipeline run id stamped into ``_run_id``.
+        files: ``(source_key, parquet_bytes)`` pairs for every partition file.
+
+    Returns:
+        A :class:`LoadResult` summarising rows loaded, rows rejected, and the
+        source keys read.
+
+    Raises:
+        KeyError: If ``table`` has no registered schema.
+        Exception: On load failure; the transaction is rolled back.
+    """
+    started = time.monotonic()
+    if not files:
+        return LoadResult(table, dt, 0, 0, [], 0)
     model = TABLE_SCHEMAS[table]
     fields = list(model.model_fields)
     ingested_at = _utcnow()
@@ -181,8 +220,7 @@ def load_partition(
     try:
         engine.execute(f"DELETE FROM raw.{table} WHERE dt = ?", [dt])
         engine.execute(f"DELETE FROM raw.{table}_rejects WHERE dt = ?", [dt])
-        for key in keys:
-            body = client.get_object(Bucket=bucket_name, Key=key)["Body"].read()
+        for key, body in files:
             file_hash = hashlib.sha256(body).hexdigest()
             frame = pd.read_parquet(io.BytesIO(body))
             for record in frame.to_dict("records"):
@@ -222,9 +260,17 @@ def load_partition(
     except Exception:
         engine.rollback()
         raise
+    keys = [key for key, _ in files]
     return LoadResult(
         table, dt, len(valid_rows), len(reject_rows), keys, int((time.monotonic() - started) * 1000)
     )
 
 
-__all__ = ["LOAD_COLUMNS", "LoadResult", "SOURCE_TABLES", "list_partitions", "load_partition"]
+__all__ = [
+    "LOAD_COLUMNS",
+    "LoadResult",
+    "SOURCE_TABLES",
+    "list_partitions",
+    "load_partition",
+    "load_partition_from_files",
+]

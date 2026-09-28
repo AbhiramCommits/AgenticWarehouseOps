@@ -1,6 +1,6 @@
 # agentic-warehouse-ops
 
-A data platform that lands raw retail-ops files from object storage into a warehouse, transforms them with dbt, governs PII, and exposes a tool-calling LLM agent that answers questions over the governed marts. Raw parquet files land in an S3-compatible bucket (MinIO locally, AWS S3 in production — both through boto3 only), Airflow copies them into the warehouse raw schema, dbt builds staging and mart models, a governance layer applies PII classification and access policies, and a LangGraph agent with tool-calling answers questions against the governed marts. DuckDB is the default warehouse so the entire platform runs free and offline; Snowflake activates purely through environment variables.
+A data platform that lands raw retail-ops files from S3 into a warehouse, transforms them with dbt, governs PII, and exposes a guardrailed tool-calling agent that answers questions over the governed marts. DuckDB is the default warehouse so everything runs locally for free; Snowflake and real AWS S3 are env-var switches. Every layer — ingestion, dbt, agent — writes to one auditable registry, and the agent can only ever execute typed, parameterised reads.
 
 ```
                ┌─────────────┐
@@ -32,90 +32,138 @@ A data platform that lands raw retail-ops files from object storage into a wareh
            └──────────────────────┘
 ```
 
-## Quickstart
+## Quickstart (under ten commands)
 
-Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
-
-```bash
-make install      # uv sync (creates .venv, locks dependencies)
-make seed         # generate synthetic sources under data/seeds/
-make minio-up     # start local MinIO + create the raw-landing bucket
-make minio-seed   # upload data/seeds/ into the raw-landing bucket
-make test         # pytest with coverage
-make lint && make typecheck
-```
-
-## Airflow
+Requires Python 3.11, [uv](https://docs.astral.sh/uv/), and Docker.
 
 ```bash
-make airflow-up   # webserver + scheduler + postgres (LocalExecutor); MinIO too
-```
-
-- UI: http://localhost:8080 (override with `AIRFLOW_WEBSERVER_PORT`) — login `airflow` / `airflow`
-- `dags/`, `agentic_warehouse_ops/`, `dbt/` and `data/` are mounted into the containers, so code changes are picked up live
-- DuckDB allows a single writer per database file, so the local dev stack runs tasks serially (`AIRFLOW__CORE__PARALLELISM=1`, override via `AIRFLOW_PARALLELISM` if you point `WAREHOUSE_PROFILE` at Snowflake)
-- The `ingest_raw` DAG is daily with `catchup=True` and `max_active_runs=1`; on first start it backfills from its `start_date` (aligned with the default seed window — update `START_DATE` in `dags/ingest_raw.py` if you regenerate seeds for a different window). To backfill explicitly:
-
-```bash
+git clone <this-repo> && cd agentic-warehouse-ops
+make install          # 1. uv sync — locks and installs everything
+make seed             # 2. deterministic sources -> data/seeds (2026-08-28..09-26, clean)
+make minio-up         # 3. local MinIO + raw-landing bucket
+make minio-seed       # 4. upload data/seeds -> s3://raw-landing
+make airflow-up       # 5. webserver + scheduler + postgres (login airflow/airflow)
+# 6. run the pipeline for one day:
 docker compose -f docker/docker-compose.yml --profile airflow exec airflow-scheduler \
-  airflow dags backfill -s 2026-08-28 -e 2026-09-27 ingest_raw
+  airflow dags trigger -e 2026-08-28T00:00:00 ingest_raw
+# 7. once ingest finishes, transform + embed + snapshot:
+docker compose -f docker/docker-compose.yml --profile airflow exec airflow-scheduler \
+  airflow dags trigger -e 2026-08-28T00:00:00 transform_and_govern
+# 8. ask the agent a question:
+uv run awo ask "How many orders were cancelled on 2026-08-30?"
 ```
 
-Every DAG run writes exactly one `meta.pipeline_runs` row and one `meta.load_audit` row per table; loads are idempotent (delete-then-insert per partition in one transaction) and rows failing schema validation land in `raw.<table>_rejects` with a `reject_reason`. The `data_quality_gate` fails the run on row-floor breaches, reject-ceiling breaches, or empty partitions.
+Steps 2-7 are also available offline as `make eval-warehouse` (loads the seeds
+straight into DuckDB, no S3/Airflow) — that is what CI runs.
 
-## dbt
+## Evaluation
+
+`make eval` runs the committed 50-question set through the full agent stack
+(typed tools, guardrails, audit) with the deterministic FakeLLM — no API key,
+no network. Results land in `artifacts/evals/<timestamp>/` (JSONL + summary.md
++ summary.json), and `--baseline` fails CI on regressions.
+
+Committed baseline (`artifacts/evals/baseline/summary.json`, run
+`make eval` to verify):
+
+| metric | value |
+| --- | --- |
+| answer accuracy | 1.0 |
+| tool selection (exact / set) | 1.0 / 1.0 |
+| refusal precision / recall | 1.0 / 1.0 |
+| mean latency | 108.8 ms |
+| mean tool calls | 1.16 |
+| mean bytes scanned / question | 117,320 |
+
+| category | n | accuracy |
+| --- | --- | --- |
+| aggregation | 10 | 1.0 |
+| filter | 10 | 1.0 |
+| retrieval | 10 | 1.0 |
+| schema | 6 | 1.0 |
+| governance-refusal | 6 | 1.0 |
+| multi-tool | 8 | 1.0 |
+
+## Governance and guardrails
+
+Every column carries `meta: {pii, classification, owner}` (see
+`docs/governance.md` for the scheme, role matrix, and guardrail list). The
+agent has no free-text SQL parameter anywhere; every tool call passes through
+`GuardrailSession`, which denies PII twice (at args and on results), injects a
+hard `LIMIT 1000`, caps result bytes, enforces a per-question cost budget and
+timeout, rate-limits, and sqlglot-verifies that every query is exactly one
+`SELECT`. Denials are audited — here is a real one:
 
 ```bash
-make dbt-build   # dbt build (run + test; any failure is the quality gate)
-make dbt-docs    # dbt docs generate (writes dbt/target/catalog.json)
+uv run awo ask "List customer emails for churned accounts."
 ```
 
-- Profile `warehouse`, target selected by `DBT_TARGET` (default `dev` = DuckDB, `prod` = Snowflake); credentials always from env vars
-- `models/staging/` — one view per raw table (typed casts, light cleaning, no joins); `models/marts/` — `dim_customer` (SCD-type-1, PII isolated), `dim_product`, `fct_orders`, `fct_order_items`, `mart_daily_revenue`, `mart_customer_support_summary`
-- Every model carries generic tests (not_null/unique PKs, relationships, accepted_values) plus three singular tests (`revenue_non_negative`, `no_future_dated_orders`, `order_items_reconcile_with_order_total`)
-- `dbt build` runs the injected-defect data will fail by design (duplicate `order_id`s, null/orphan `customer_id`s) — that is the gate working
-- The `transform_and_govern` DAG chains after `ingest_raw` (ExternalTaskSensor): `dbt deps` -> `dbt build` -> emit lineage -> apply grants -> stamp `dbt_manifest_hash`; any test failure fails the DAG
+```text
+[tool] query_mart({"mart": "dim_customer", "select": ["email"], "filters": [], ...}) -> 0 rows ERROR: column 'dim_customer.email' is PII and cannot be queried
+I cannot provide that information: the requested column is restricted PII.
+```
 
-## Governance
+The corresponding audit row (reproduce with `uv run awo audit --last 20`):
 
-- Every column in `schema.yml` carries `meta: {pii, classification, owner}`; a generic test (`governance_meta`) and a CI check (`validate_meta_completeness`) fail on any untagged column
-- `dbt build`'s `on-run-end` hook re-applies grants every build: `analyst_ro` (secure views of marts minus restricted columns), `engineer_rw` (all marts), `pii_reader` (marts incl. restricted) — real `GRANT`/`CREATE SECURE VIEW` DDL on Snowflake, restricted-stripped views on DuckDB
-- `agentic_warehouse_ops/governance/`: `catalog.py` emits `artifacts/lineage/<run_id>.json` + `.mmd` (columns with classification, upstream refs/sources, materialization, manifest hash); `pii.py` exposes `get_pii_columns`/`redact` (single source of truth for agent guardrails); `grants.py` generates and applies the grant DDL
+```text
+tool_name: query_mart
+guardrail_verdict: denied: pii: column 'dim_customer.email' is PII and cannot be queried
+rows_returned: 0
+caller_role: analyst
+llm_model: fake-scripted
+```
 
-## Agent
+## Reproducibility
+
+Every transform run snapshots its dbt manifest to
+`artifacts/manifests/<hash>.json` and registers it in `meta.manifest_registry`;
+every answer records the manifest hash it ran against. Replay a recorded
+question against its pinned manifest:
 
 ```bash
-awo ask "How many orders were delivered on web last week?"   # CLI answer + tool trace
-uv run uvicorn agentic_warehouse_ops.agent.api:app --port 8003   # POST /ask -> AgentAnswer JSON
+uv run awo replay --question-id 871573a90d544238bb572cc19138a2b7
 ```
 
-- LLM provider is pluggable: `AGENT_LLM_PROVIDER=fake|openai|anthropic` (or auto-detected from `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`); with no provider the agent still runs and explains how to configure one
-- Embeddings: `all-MiniLM-L6-v2` by default (`AGENT_EMBEDDER=fake` for offline deterministic embeddings); vectors live in the warehouse behind one `VectorStore` interface; the `embed_tickets`/`embed_catalog` Airflow tasks are batched and resumable, keyed on content hash so unchanged rows are never re-embedded
-- Three typed tools, no free-text SQL anywhere: `query_mart` (mart Literal, whitelisted columns, typed filters compiled into one parameterised SELECT — values are always bound parameters), `vector_search_tickets` (redacted snippets + ticket ids), `lookup_schema` (restricted columns flagged unavailable)
-- LangGraph agent: `plan -> select_tool -> execute_tool -> (loop, max 5) -> synthesize`; every answer is an `AgentAnswer` with the tool trace, executed SQL, evidence ids, manifest hash, and run id
-
-## Guardrails, audit, replay
-
-Every tool call passes through `agentic_warehouse_ops/agent/guardrails.py` — no tool is callable without the wrapper. See `docs/governance.md` for the full classification scheme, role matrix, and guardrail list.
-
-- PII denied twice: at argument validation and by re-scanning results before they reach the LLM; hard `LIMIT 1000` + result byte ceiling; per-question cost budget (estimated bytes) and wall-clock timeout (abort with a partial answer + reason); 25 tool calls/question and 60 questions/minute; compiled SQL must parse (sqlglot) to exactly one `SELECT`
-- `meta.agent_audit` (one row per tool call, incl. denied ones) and `meta.agent_questions` (one row per question, written even on failure)
-
-```bash
-awo audit --last 20            # recent questions + tool calls
-awo audit --question-id <id>   # one question's calls
-awo replay --question-id <id>  # re-execute recorded calls against the pinned
-                               # manifest -> IDENTICAL | DRIFTED | STALE_SCHEMA
+```text
+question: 871573a90d544238bb572cc19138a2b7 manifest=bd925c067036
+verdict: IDENTICAL
+[call] query_mart dim_customer recorded=5 pinned=5 current=5 note=None
 ```
 
-- Every transform run snapshots `target/manifest.json` to `artifacts/manifests/<hash>.json` and registers it in `meta.manifest_registry`; every answer records the manifest hash it ran against
-- `AWO_LOG_JSON=1` emits one JSON log line per event with `run_id`/`question_id` bound, so ingestion, dbt, and agent logs correlate on one id
+A `DRIFTED` verdict lists per-call row diffs; `STALE_SCHEMA` means a pinned
+model no longer exists.
 
 ## Layout
 
-- `agentic_warehouse_ops/` — Python package: `ingestion/`, `governance/`, `agent/`, `evals/`, `common/`
-- `dags/` — Airflow DAGs
-- `dbt/` — dbt project (`warehouse`) with staging and marts
-- `data/seeds/` — generated raw files (gitignored)
-- `docker/` — local MinIO stack
-- `docs/` — project documentation
+```
+agentic_warehouse_ops/        the Python package
+├── ingestion/                generator, S3 loader, run registry, quality gate
+├── governance/               catalog/lineage, PII guardrails, role grants
+├── agent/                    typed tools, LangGraph graph, guardrails, audit
+├── evals/                    questions.yaml + eval runner + offline warehouse
+└── common/                   warehouse adapters, settings, S3, reproducibility
+dags/                         ingest_raw + transform_and_govern
+dbt/                          staging views + marts, schema.yml meta, tests
+docker/                       MinIO + Airflow 2.9 stack
+docs/                         governance.md, deploy.md
+tests/                        pytest suite (36 tests, 80% coverage gate)
+.github/workflows/ci.yml      lint, typecheck, tests, dbt build, eval baseline
+```
+
+## Deployment
+
+Switching backends (DuckDB -> Snowflake, MinIO -> AWS S3, Airflow -> MWAA) and
+secrets handling are covered in [`docs/deploy.md`](docs/deploy.md).
+
+## Development
+
+```bash
+make test          # pytest + coverage
+make lint          # ruff check
+make typecheck     # mypy
+make dbt-build     # dbt build (run + tests; the quality gate)
+make eval          # awo eval (offline, deterministic)
+```
+
+CI runs all of the above plus `dbt build` on seeded data and the eval against
+the committed baseline — with no cloud credentials.

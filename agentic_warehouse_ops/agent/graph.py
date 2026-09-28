@@ -67,6 +67,7 @@ class AgentState(TypedDict, total=False):
     evidence: list[Any]
     sql_executed: list[str]
     evidence_ids: list[str]
+    tool_results: list[dict[str, Any]]
     step: AgentStep
     iteration: int
     error: str
@@ -230,8 +231,14 @@ def _build_execute_node(
                 "route": "synthesize" if iteration >= max_iterations else "plan",
             }
         record.duration_ms = int((time.monotonic() - started) * 1000)
+        history = [*state.get("history", []), record]
+        evidence = list(state.get("evidence", []))
+        evidence_ids = list(state.get("evidence_ids", []))
+        sql_executed = list(state.get("sql_executed", []))
+        tool_results = list(state.get("tool_results", []))
         if isinstance(result, dict):
             record.row_count = int(result.get("row_count", 0))
+            tool_results.append({"tool": step.tool, "result": result})
             if "records" in result:
                 evidence.extend(result["records"])
             elif "results" in result:
@@ -251,6 +258,7 @@ def _build_execute_node(
             "evidence": evidence,
             "evidence_ids": evidence_ids,
             "sql_executed": sql_executed,
+            "tool_results": tool_results,
             "route": "synthesize" if iteration >= max_iterations else "plan",
         }
 
@@ -436,6 +444,7 @@ def run_agent(
                 "evidence": [],
                 "sql_executed": [],
                 "evidence_ids": [],
+                "tool_results": [],
                 "iteration": 0,
             }
         )
@@ -468,6 +477,7 @@ def run_agent(
         question_id=question_id,
         status=status,
         abort_reason=abort_reason,
+        tool_results=list(final.get("tool_results", [])),
     )
     log.info("agent_complete", status=status, tool_calls=len(answer.tool_calls))
     return _finish(answer, status, resolved_session._tool_calls, resolved_session._bytes_used)

@@ -203,8 +203,6 @@ def compile_query(
         _validate_identifier(clause.column, columns, "filter")
     for term in order_by:
         _validate_identifier(term.column, columns, "order_by")
-        if term.column not in select:
-            raise ToolError(f"order_by column '{term.column}' must be in select")
 
     sql = f"SELECT {', '.join(select)} FROM {model['schema']}.{model['name']}"
     params: list[Any] = []

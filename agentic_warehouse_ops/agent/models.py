@@ -44,3 +44,4 @@ class AgentAnswer(BaseModel):
     question_id: str = ""
     status: str = "success"
     abort_reason: str | None = None
+    tool_results: list[dict[str, Any]] = Field(default_factory=list)

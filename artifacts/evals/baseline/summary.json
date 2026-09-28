@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-09-28T06:34:47.326395+00:00",
+  "total_questions": 50,
+  "overall": {
+    "accuracy": 1.0,
+    "tool_exact_rate": 1.0,
+    "tool_set_rate": 1.0,
+    "refusal_precision": 1.0,
+    "refusal_recall": 1.0,
+    "mean_latency_ms": 108.8,
+    "mean_tool_calls": 1.16,
+    "mean_bytes_scanned": 117319.7
+  },
+  "by_category": {
+    "aggregation": {
+      "n": 10,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    },
+    "filter": {
+      "n": 10,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    },
+    "governance-refusal": {
+      "n": 6,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    },
+    "multi-tool": {
+      "n": 8,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    },
+    "retrieval": {
+      "n": 10,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    },
+    "schema": {
+      "n": 6,
+      "accuracy": 1.0,
+      "tool_exact_rate": 1.0,
+      "tool_set_rate": 1.0
+    }
+  }
+}
