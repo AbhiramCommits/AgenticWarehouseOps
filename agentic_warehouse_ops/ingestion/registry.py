@@ -177,6 +177,48 @@ def close_run(engine: WarehouseEngine, run_id: str, status: str) -> None:
     )
 
 
+def lookup_run(
+    engine: WarehouseEngine,
+    dag_id: str,
+    logical_date: datetime,
+) -> str | None:
+    """Return the run id for a (dag, logical date), or ``None`` if unopened.
+
+    Args:
+        engine: Warehouse engine.
+        dag_id: DAG identifier.
+        logical_date: DAG run logical date.
+
+    Returns:
+        The registered run id, if any.
+    """
+    if logical_date.tzinfo is not None:
+        logical_date = logical_date.replace(tzinfo=None)
+    rows = engine.execute(
+        "SELECT run_id FROM meta.pipeline_runs WHERE dag_id = ? AND logical_date = ?",
+        [dag_id, logical_date],
+    )
+    return None if rows.empty else str(rows.iloc[0]["run_id"])
+
+
+def stamp_manifest_hash(
+    engine: WarehouseEngine,
+    run_id: str,
+    dbt_manifest_hash: str,
+) -> None:
+    """Stamp the dbt manifest hash onto a pipeline run.
+
+    Args:
+        engine: Warehouse engine.
+        run_id: Run id previously returned by :func:`open_run`.
+        dbt_manifest_hash: SHA-256 of the dbt manifest that produced the marts.
+    """
+    engine.execute(
+        "UPDATE meta.pipeline_runs SET dbt_manifest_hash = ? WHERE run_id = ?",
+        [dbt_manifest_hash, run_id],
+    )
+
+
 def record_load_audit(
     engine: WarehouseEngine,
     run_id: str,

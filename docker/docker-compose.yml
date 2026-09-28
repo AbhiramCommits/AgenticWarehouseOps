@@ -16,6 +16,7 @@ x-airflow-common: &airflow-common
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__PARALLELISM: "${AIRFLOW_PARALLELISM:-1}"
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
@@ -34,6 +35,7 @@ x-airflow-common: &airflow-common
     - ../agentic_warehouse_ops:/opt/airflow/agentic_warehouse_ops
     - ../dbt:/opt/airflow/dbt
     - ../data:/opt/airflow/data
+    - ../artifacts:/opt/airflow/artifacts
   depends_on:
     airflow-postgres:
       condition: service_healthy

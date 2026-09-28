@@ -14,12 +14,12 @@ __pycache__/
 data/
 *.duckdb
 *.duckdb.wal
+artifacts/
 
 # dbt
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
-dbt/profiles.yml
 
 # Tooling
 .coverage
@@ -27,3 +27,5 @@ htmlcov/
 dist/
 build/
 .DS_Store
+
+dbt/.user.yml

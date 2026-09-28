@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: Raw landing tables loaded by the ingest_raw pipeline.
+    tables:
+      - name: customers
+      - name: orders
+      - name: order_items
+      - name: products
+      - name: support_tickets

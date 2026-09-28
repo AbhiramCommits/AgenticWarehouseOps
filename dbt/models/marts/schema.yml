@@ -1,0 +1,198 @@
+version: 2
+
+models:
+  - name: dim_customer
+    description: Type-1 customer dimension; all PII columns are isolated in this model.
+    columns:
+      - name: customer_id
+        description: Surrogate customer key.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null, unique]
+      - name: full_name
+        description: Customer full name (PII).
+        meta: {pii: true, classification: restricted, owner: analytics}
+      - name: email
+        description: Customer email address (PII).
+        meta: {pii: true, classification: restricted, owner: analytics}
+      - name: phone
+        description: Customer phone number (PII).
+        meta: {pii: true, classification: restricted, owner: analytics}
+      - name: signup_date
+        description: Date the customer signed up.
+        meta: {pii: false, classification: internal, owner: analytics}
+      - name: country
+        description: Customer country code.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: segment
+        description: Customer segment.
+        meta: {pii: false, classification: public, owner: analytics}
+    tests:
+      - governance_meta
+
+  - name: dim_product
+    description: Product dimension, latest price wins.
+    columns:
+      - name: sku
+        description: Product SKU.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null, unique]
+      - name: product_name
+        description: Human-readable product name.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: category
+        description: Product category.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: supplier
+        description: Supplier name.
+        meta: {pii: false, classification: internal, owner: analytics}
+      - name: list_price
+        description: Catalogue list price.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+    tests:
+      - governance_meta
+
+  - name: fct_orders
+    description: One row per order with monetary metrics and fulfilment latency.
+    columns:
+      - name: order_id
+        description: Order identifier.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null, unique]
+      - name: customer_id
+        description: Customer that placed the order.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: order_ts
+        description: Timestamp the order was placed.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null]
+      - name: status
+        description: Order status.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: channel
+        description: Sales channel.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: currency
+        description: Order currency code.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: order_total
+        description: Sum of line totals for the order.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: item_count
+        description: Number of line items on the order.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: fulfilment_latency_days
+        description: Days spent in a non-terminal state; null once terminal.
+        meta: {pii: false, classification: public, owner: analytics}
+    tests:
+      - governance_meta
+
+  - name: fct_order_items
+    description: One row per line item, enriched with order and product context.
+    columns:
+      - name: order_item_id
+        description: Line item identifier.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null, unique]
+      - name: order_id
+        description: Parent order identifier.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests:
+          - not_null
+          - relationships:
+              to: ref('fct_orders')
+              field: order_id
+      - name: sku
+        description: Product SKU.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null]
+      - name: quantity
+        description: Quantity ordered.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: unit_price
+        description: Unit price paid.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: line_total
+        description: quantity * unit_price.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: order_ts
+        description: Parent order timestamp.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null]
+      - name: channel
+        description: Parent order sales channel.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: currency
+        description: Parent order currency.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: customer_id
+        description: Customer that placed the parent order.
+        meta: {pii: false, classification: internal, owner: analytics}
+      - name: category
+        description: Product category of the line item.
+        meta: {pii: false, classification: public, owner: analytics}
+    tests:
+      - governance_meta
+
+  - name: mart_daily_revenue
+    description: Daily revenue rolled up by channel and category.
+    columns:
+      - name: revenue_date
+        description: Date of the revenue.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: channel
+        description: Sales channel.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: category
+        description: Product category.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: revenue
+        description: Total line revenue.
+        meta: {pii: false, classification: public, owner: analytics}
+        tests: [not_null]
+      - name: orders
+        description: Distinct orders contributing to the cell.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: units_sold
+        description: Total units sold in the cell.
+        meta: {pii: false, classification: public, owner: analytics}
+    tests:
+      - governance_meta
+
+  - name: mart_customer_support_summary
+    description: Per-customer support ticket summary.
+    columns:
+      - name: customer_id
+        description: Customer identifier.
+        meta: {pii: false, classification: internal, owner: analytics}
+        tests: [not_null, unique]
+      - name: ticket_count
+        description: Total tickets opened by the customer.
+        meta: {pii: false, classification: public, owner: analytics}
+      - name: first_ticket_ts
+        description: Timestamp of the first ticket.
+        meta: {pii: false, classification: internal, owner: analytics}
+      - name: last_ticket_ts
+        description: Timestamp of the most recent ticket.
+        meta: {pii: false, classification: internal, owner: analytics}
+      - name: open_ticket_count
+        description: Tickets opened in the last 30 days (open proxy).
+        meta: {pii: false, classification: public, owner: analytics}
+    tests:
+      - governance_meta

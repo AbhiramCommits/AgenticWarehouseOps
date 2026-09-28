@@ -267,6 +267,19 @@ class _TaskProxy:
     def set_downstream(self, *args: Any, **kwargs: Any) -> None:
         return None
 
+    def __rshift__(self, other: Any) -> Any:
+        return other
+
+
+class _SensorStub:
+    """Stand-in for airflow sensors (e.g. ExternalTaskSensor)."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def __rshift__(self, other: Any) -> Any:
+        return other
+
 
 def _stub_airflow_modules() -> None:
     """Install minimal airflow stand-ins so DAG files import without airflow.
@@ -296,13 +309,18 @@ def _stub_airflow_modules() -> None:
     decorators = ModuleType("airflow.decorators")
     utils = ModuleType("airflow.utils")
     trigger_rule = ModuleType("airflow.utils.trigger_rule")
+    sensors = ModuleType("airflow.sensors")
+    external_task = ModuleType("airflow.sensors.external_task")
     decorators.task = task_stub
     decorators.dag = dag_stub
     trigger_rule.TriggerRule = SimpleNamespace(ALL_DONE="all_done")
+    external_task.ExternalTaskSensor = _SensorStub
     sys.modules["airflow"] = airflow
     sys.modules["airflow.decorators"] = decorators
     sys.modules["airflow.utils"] = utils
     sys.modules["airflow.utils.trigger_rule"] = trigger_rule
+    sys.modules["airflow.sensors"] = sensors
+    sys.modules["airflow.sensors.external_task"] = external_task
 
 
 def test_all_dags_import_cleanly() -> None:

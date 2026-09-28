@@ -1,14 +1,15 @@
-# Copy to ~/.dbt/profiles.yml or point DBT_PROFILES_DIR at dbt/.
-# DuckDB is the default target so everything runs locally; Snowflake activates
-# when SNOWFLAKE_* environment variables are set.
+# dbt profiles: `dev` targets local DuckDB (free, offline); `prod` targets
+# Snowflake. The active target is selected with the DBT_TARGET env var
+# (defaults to dev). All credentials come from environment variables.
 warehouse:
-  target: duckdb
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
   outputs:
-    duckdb:
+    dev:
       type: duckdb
       path: "{{ env_var('DUCKDB_PATH', 'data/warehouse.duckdb') }}"
       schema: raw
-    snowflake:
+      threads: 1
+    prod:
       type: snowflake
       account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
       user: "{{ env_var('SNOWFLAKE_USER') }}"
@@ -17,3 +18,4 @@ warehouse:
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
       database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
       schema: raw
+      threads: 4

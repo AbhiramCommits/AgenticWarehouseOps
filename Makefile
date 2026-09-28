@@ -1,4 +1,4 @@
-.PHONY: install seed minio-up minio-seed airflow-up airflow-down lint typecheck test fmt
+.PHONY: install seed minio-up minio-seed airflow-up airflow-down dbt-build dbt-docs lint typecheck test fmt
 
 install:
 	uv sync
@@ -18,6 +18,12 @@ airflow-up:
 
 airflow-down:
 	docker compose -f docker/docker-compose.yml --profile airflow down
+
+dbt-build:
+	uv run dbt build --project-dir dbt --profiles-dir dbt
+
+dbt-docs:
+	uv run dbt docs generate --project-dir dbt --profiles-dir dbt
 
 lint:
 	uv run ruff check .

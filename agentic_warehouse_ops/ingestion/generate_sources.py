@@ -223,13 +223,23 @@ def _table_rngs(seed: int, *names: str) -> dict[str, Generator]:
     return {name: np.random.default_rng(child) for name, child in zip(names, children, strict=True)}
 
 
-def generate_customers(rng: Generator, n: int, end_date: date) -> pd.DataFrame:
+def generate_customers(
+    rng: Generator,
+    n: int,
+    end_date: date,
+    window_days: int = 30,
+) -> pd.DataFrame:
     """Generate ``n`` customers; ``full_name``/``email``/``phone`` are PII.
+
+    Signup dates spread over ``window_days`` before (and including)
+    ``end_date``, so a daily ingest backfill covering the same window loads
+    the complete customer dimension.
 
     Args:
         rng: Seeded RNG for this table.
         n: Number of customers to generate.
-        end_date: Latest possible signup date (signups span the two years before it).
+        end_date: Latest possible signup date.
+        window_days: Number of days signups spread over.
 
     Returns:
         A DataFrame with columns ``customer_id``, ``full_name``, ``email``,
@@ -239,7 +249,7 @@ def generate_customers(rng: Generator, n: int, end_date: date) -> pd.DataFrame:
     last = rng.choice(LAST_NAMES, size=n)
     countries = rng.choice(tuple(COUNTRIES), size=n, p=list(COUNTRIES.values()))
     segments = rng.choice(SEGMENTS, size=n, p=[0.25, 0.55, 0.20])
-    signup_days_ago = rng.integers(0, 730, size=n)
+    signup_days_ago = rng.integers(0, window_days, size=n)
     signup_date = pd.to_datetime(end_date) - pd.to_timedelta(signup_days_ago, unit="D")
     domains = rng.choice(EMAIL_DOMAINS, size=n)
     emails: list[str] = []
@@ -533,7 +543,12 @@ def generate_dataset(
     customers_n = n_customers or max(500, (days * orders_per_day) // 8)
     rngs = _table_rngs(seed, *TABLES)
 
-    customers = generate_customers(rngs["customers"], customers_n, end_date=start)
+    customers = generate_customers(
+        rngs["customers"],
+        customers_n,
+        end_date=start + timedelta(days=days - 1),
+        window_days=days,
+    )
     customers["dt"] = pd.to_datetime(customers["signup_date"]).dt.normalize()
 
     products = generate_products(rngs["products"], n_products)

@@ -63,6 +63,25 @@ docker compose -f docker/docker-compose.yml --profile airflow exec airflow-sched
 
 Every DAG run writes exactly one `meta.pipeline_runs` row and one `meta.load_audit` row per table; loads are idempotent (delete-then-insert per partition in one transaction) and rows failing schema validation land in `raw.<table>_rejects` with a `reject_reason`. The `data_quality_gate` fails the run on row-floor breaches, reject-ceiling breaches, or empty partitions.
 
+## dbt
+
+```bash
+make dbt-build   # dbt build (run + test; any failure is the quality gate)
+make dbt-docs    # dbt docs generate (writes dbt/target/catalog.json)
+```
+
+- Profile `warehouse`, target selected by `DBT_TARGET` (default `dev` = DuckDB, `prod` = Snowflake); credentials always from env vars
+- `models/staging/` — one view per raw table (typed casts, light cleaning, no joins); `models/marts/` — `dim_customer` (SCD-type-1, PII isolated), `dim_product`, `fct_orders`, `fct_order_items`, `mart_daily_revenue`, `mart_customer_support_summary`
+- Every model carries generic tests (not_null/unique PKs, relationships, accepted_values) plus three singular tests (`revenue_non_negative`, `no_future_dated_orders`, `order_items_reconcile_with_order_total`)
+- `dbt build` runs the injected-defect data will fail by design (duplicate `order_id`s, null/orphan `customer_id`s) — that is the gate working
+- The `transform_and_govern` DAG chains after `ingest_raw` (ExternalTaskSensor): `dbt deps` -> `dbt build` -> emit lineage -> apply grants -> stamp `dbt_manifest_hash`; any test failure fails the DAG
+
+## Governance
+
+- Every column in `schema.yml` carries `meta: {pii, classification, owner}`; a generic test (`governance_meta`) and a CI check (`validate_meta_completeness`) fail on any untagged column
+- `dbt build`'s `on-run-end` hook re-applies grants every build: `analyst_ro` (secure views of marts minus restricted columns), `engineer_rw` (all marts), `pii_reader` (marts incl. restricted) — real `GRANT`/`CREATE SECURE VIEW` DDL on Snowflake, restricted-stripped views on DuckDB
+- `agentic_warehouse_ops/governance/`: `catalog.py` emits `artifacts/lineage/<run_id>.json` + `.mmd` (columns with classification, upstream refs/sources, materialization, manifest hash); `pii.py` exposes `get_pii_columns`/`redact` (single source of truth for agent guardrails); `grants.py` generates and applies the grant DDL
+
 ## Layout
 
 - `agentic_warehouse_ops/` — Python package: `ingestion/`, `governance/`, `agent/`, `evals/`, `common/`

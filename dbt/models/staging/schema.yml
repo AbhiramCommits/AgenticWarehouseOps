@@ -1,0 +1,147 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: Cleaned and typed customers; PII columns pass through for governance.
+    columns:
+      - name: customer_id
+        description: Surrogate customer key.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null, unique]
+      - name: full_name
+        description: Customer full name (PII).
+        meta: {pii: true, classification: restricted, owner: data-eng}
+      - name: email
+        description: Customer email address (PII).
+        meta: {pii: true, classification: restricted, owner: data-eng}
+      - name: phone
+        description: Customer phone number (PII).
+        meta: {pii: true, classification: restricted, owner: data-eng}
+      - name: signup_date
+        description: Date the customer signed up.
+        meta: {pii: false, classification: internal, owner: data-eng}
+      - name: country
+        description: Customer country code.
+        meta: {pii: false, classification: public, owner: data-eng}
+      - name: segment
+        description: Customer segment.
+        meta: {pii: false, classification: public, owner: data-eng}
+    tests:
+      - governance_meta
+
+  - name: stg_orders
+    description: Cleaned and typed orders; duplicate order_ids remain for tests to catch.
+    columns:
+      - name: order_id
+        description: Order identifier.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null, unique]
+      - name: customer_id
+        description: Customer that placed the order; may be null or orphaned (defects).
+        meta: {pii: false, classification: internal, owner: data-eng}
+      - name: order_ts
+        description: Timestamp the order was placed.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null]
+      - name: status
+        description: Order status.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests:
+          - not_null
+          - accepted_values:
+              values: [pending, shipped, delivered, cancelled, returned]
+      - name: channel
+        description: Sales channel.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests:
+          - not_null
+          - accepted_values:
+              values: [web, mobile, store, partner]
+      - name: currency
+        description: Order currency code.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests:
+          - not_null
+          - accepted_values:
+              values: [USD, EUR, GBP]
+    tests:
+      - governance_meta
+
+  - name: stg_order_items
+    description: Cleaned and typed order line items.
+    columns:
+      - name: order_item_id
+        description: Line item identifier.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null, unique]
+      - name: order_id
+        description: Parent order identifier.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null]
+      - name: sku
+        description: Product SKU.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null]
+      - name: quantity
+        description: Quantity ordered.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+      - name: unit_price
+        description: Unit price paid.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+    tests:
+      - governance_meta
+
+  - name: stg_products
+    description: Cleaned and typed product catalogue.
+    columns:
+      - name: sku
+        description: Product SKU.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null, unique]
+      - name: product_name
+        description: Human-readable product name.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+      - name: category
+        description: Product category.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+      - name: supplier
+        description: Supplier name.
+        meta: {pii: false, classification: internal, owner: data-eng}
+      - name: list_price
+        description: Catalogue list price.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+    tests:
+      - governance_meta
+
+  - name: stg_support_tickets
+    description: Cleaned and typed support tickets; body_text is free text (PII risk).
+    columns:
+      - name: ticket_id
+        description: Ticket identifier.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null, unique]
+      - name: customer_id
+        description: Customer that opened the ticket.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null]
+      - name: created_ts
+        description: Timestamp the ticket was created.
+        meta: {pii: false, classification: internal, owner: data-eng}
+        tests: [not_null]
+      - name: channel
+        description: Ticket channel.
+        meta: {pii: false, classification: public, owner: data-eng}
+        tests: [not_null]
+      - name: subject
+        description: Ticket subject line.
+        meta: {pii: false, classification: internal, owner: data-eng}
+      - name: body_text
+        description: Free-text ticket body; may contain customer PII.
+        meta: {pii: true, classification: restricted, owner: data-eng}
+    tests:
+      - governance_meta
