@@ -142,9 +142,34 @@ def transform_and_govern() -> None:
             _engine(), run_id=lineage["run_id"], dbt_manifest_hash=lineage["manifest_hash"]
         )
 
+    @task(task_id="embed_tickets")
+    def embed_tickets_task() -> None:
+        """Embed support-ticket text into the vector index (resumable, hash-keyed)."""
+        from agentic_warehouse_ops.agent.index import embed_support_tickets, get_embedder
+
+        result = embed_support_tickets(_engine(), embedder=get_embedder())
+        print(result)
+
+    @task(task_id="embed_catalog")
+    def embed_catalog_task() -> None:
+        """Embed model/column descriptions from the dbt manifest."""
+        from agentic_warehouse_ops.agent.index import embed_catalog, get_embedder
+
+        manifest = json.loads(Path(DBT_DIR, "target", "manifest.json").read_text())
+        result = embed_catalog(_engine(), manifest, embedder=get_embedder())
+        print(result)
+
     lineage = emit_lineage()
     wait_for_ingest >> dbt_deps() >> dbt_build() >> lineage
-    apply_grants_task() >> stamp_manifest_hash_task(lineage)
+    (
+        lineage
+        >> apply_grants_task()
+        >> stamp_manifest_hash_task(lineage)
+        >> [
+            embed_tickets_task(),
+            embed_catalog_task(),
+        ]
+    )
 
 
 dag = transform_and_govern()

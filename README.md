@@ -82,6 +82,18 @@ make dbt-docs    # dbt docs generate (writes dbt/target/catalog.json)
 - `dbt build`'s `on-run-end` hook re-applies grants every build: `analyst_ro` (secure views of marts minus restricted columns), `engineer_rw` (all marts), `pii_reader` (marts incl. restricted) — real `GRANT`/`CREATE SECURE VIEW` DDL on Snowflake, restricted-stripped views on DuckDB
 - `agentic_warehouse_ops/governance/`: `catalog.py` emits `artifacts/lineage/<run_id>.json` + `.mmd` (columns with classification, upstream refs/sources, materialization, manifest hash); `pii.py` exposes `get_pii_columns`/`redact` (single source of truth for agent guardrails); `grants.py` generates and applies the grant DDL
 
+## Agent
+
+```bash
+awo ask "How many orders were delivered on web last week?"   # CLI answer + tool trace
+uv run uvicorn agentic_warehouse_ops.agent.api:app --port 8003   # POST /ask -> AgentAnswer JSON
+```
+
+- LLM provider is pluggable: `AGENT_LLM_PROVIDER=fake|openai|anthropic` (or auto-detected from `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`); with no provider the agent still runs and explains how to configure one
+- Embeddings: `all-MiniLM-L6-v2` by default (`AGENT_EMBEDDER=fake` for offline deterministic embeddings); vectors live in the warehouse behind one `VectorStore` interface; the `embed_tickets`/`embed_catalog` Airflow tasks are batched and resumable, keyed on content hash so unchanged rows are never re-embedded
+- Three typed tools, no free-text SQL anywhere: `query_mart` (mart Literal, whitelisted columns, typed filters compiled into one parameterised SELECT — values are always bound parameters), `vector_search_tickets` (redacted snippets + ticket ids), `lookup_schema` (restricted columns flagged unavailable)
+- LangGraph agent: `plan -> select_tool -> execute_tool -> (loop, max 5) -> synthesize`; every answer is an `AgentAnswer` with the tool trace, executed SQL, evidence ids, manifest hash, and run id
+
 ## Layout
 
 - `agentic_warehouse_ops/` — Python package: `ingestion/`, `governance/`, `agent/`, `evals/`, `common/`

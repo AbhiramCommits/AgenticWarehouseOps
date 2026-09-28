@@ -30,6 +30,18 @@ def compute_manifest_hash(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def load_manifest(manifest_path: str | Path) -> dict[str, Any]:
+    """Load a dbt ``manifest.json`` file into a dict.
+
+    Args:
+        manifest_path: Filesystem path to the manifest.
+
+    Returns:
+        Parsed manifest contents.
+    """
+    return json.loads(Path(manifest_path).read_text())
+
+
 def validate_meta_completeness(
     manifest: dict[str, Any], package_name: str = "warehouse"
 ) -> list[str]:
