@@ -141,6 +141,9 @@ class DuckDBVectorStore(VectorStore):
         sql = "SELECT id, content, embedding, metadata FROM agent.embeddings"
         if where:
             sql += " WHERE " + " AND ".join(where)
+        # Fixed row order + stable sort so equal scores (templated tickets often
+        # embed identically) always rank the same way: ties go to the lowest id.
+        sql += " ORDER BY id"
         frame = self._engine.execute(sql, params)
         if frame.empty:
             return []
@@ -148,7 +151,7 @@ class DuckDBVectorStore(VectorStore):
         matrix = np.vstack([np.asarray(values, dtype=float) for values in frame["embedding"]])
         norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vector)
         scores = (matrix @ query_vector) / (norms + 1e-9)
-        top = np.argsort(-scores)[:k]
+        top = np.argsort(-scores, kind="stable")[:k]
         results: list[dict[str, Any]] = []
         for index in top:
             results.append(

@@ -505,7 +505,7 @@ questions:
     - '1790'
     - '858'
     - '1112'
-    - '2925'
+    - '2378'
 - id: R02
   question: Find support tickets about refund requests.
   category: retrieval
@@ -521,8 +521,8 @@ questions:
     - '686'
     - '972'
     - '2345'
-    - '2764'
     - '2096'
+    - '2764'
 - id: R03
   question: Find support tickets about account login problems.
   category: retrieval
@@ -535,11 +535,11 @@ questions:
   expected_answer:
     kind: set
     values:
-    - '1515'
-    - '1741'
-    - '1743'
-    - '2802'
-    - '1325'
+    - '1001'
+    - '1006'
+    - '1015'
+    - '1039'
+    - '1061'
 - id: R04
   question: Find support tickets about damaged items.
   category: retrieval
@@ -570,7 +570,7 @@ questions:
     - '493'
     - '717'
     - '1619'
-    - '2804'
+    - '344'
 - id: R06
   question: Find support tickets about promo codes not working.
   category: retrieval
@@ -599,8 +599,8 @@ questions:
     kind: set
     values:
     - '997'
-    - '292'
     - '2123'
+    - '292'
     - '2360'
 - id: R08
   question: Find support tickets about changing delivery addresses.
@@ -650,10 +650,10 @@ questions:
     kind: set
     values:
     - '1664'
-    - '448'
     - '1454'
-    - '423'
+    - '448'
     - '1864'
+    - '2152'
 - id: S01
   question: Which columns of dim_customer are restricted?
   category: schema
@@ -917,11 +917,11 @@ questions:
   expected_answer:
     kind: set
     values:
-    - '2122'
-    - '1215'
-    - '2405'
-    - '2800'
-    - '2127'
+    - '1019'
+    - '1054'
+    - '1094'
+    - '1131'
+    - '1165'
 - id: M04
   question: What was web+electronics revenue on 2026-08-29? (check the mart schema)
   category: multi-tool
